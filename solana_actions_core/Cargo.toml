@@ -1,0 +1,22 @@
+[package]
+name = "solana_actions_core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+solana-sdk = "1.18.1"
+solana-client = "1.18.1"
+spl-token = { version = "4.0.0", features = ["no-entrypoint"] }
+spl-associated-token-account = { version = "2.3.0", features = ["no-entrypoint"] }
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1.77"
+anyhow = "1.0.75"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.108"
+bs58 = "0.5.0"
+
+reqwest = { version = "0.12.2", features = ["json"] }
+url = "2.5.0"
+
+bigdecimal = "0.4.3"
+solana-actions-token = { path = "../plugins/token" } 
