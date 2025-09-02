@@ -7,8 +7,7 @@ use async_trait::async_trait;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-/// trait for signing Solana transactions.
-/// allows for flexible wallet implementations, from local keypairs to remote signers.
+/// a trait for signing Solana transactions.
 #[async_trait]
 pub trait Wallet: Send + Sync + Debug {
     fn pubkey(&self) -> Pubkey;
@@ -22,7 +21,6 @@ pub trait Wallet: Send + Sync + Debug {
     ) -> anyhow::Result<Vec<VersionedTransaction>>;
 }
 
-/// wallet implementation using a local Solana Keypair.
 #[derive(Debug)]
 pub struct KeypairWallet {
     pub keypair: Arc<Keypair>,
@@ -46,7 +44,9 @@ impl Wallet for KeypairWallet {
         &self,
         mut tx: VersionedTransaction,
     ) -> anyhow::Result<VersionedTransaction> {
-        tx.sign(&[self.keypair.as_ref()], self.keypair.pubkey().into());
+        let message_bytes = tx.message.serialize();
+        let signature = self.keypair.sign_message(&message_bytes);
+        tx.signatures.push(signature);
         Ok(tx)
     }
 
@@ -55,7 +55,9 @@ impl Wallet for KeypairWallet {
         mut txs: Vec<VersionedTransaction>,
     ) -> anyhow::Result<Vec<VersionedTransaction>> {
         for tx in &mut txs {
-            tx.sign(&[self.keypair.as_ref()], self.keypair.pubkey().into());
+            let message_bytes = tx.message.serialize();
+            let signature = self.keypair.sign_message(&message_bytes);
+            tx.signatures.push(signature);
         }
         Ok(txs)
     }

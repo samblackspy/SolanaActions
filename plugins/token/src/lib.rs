@@ -1,3 +1,4 @@
+// plugin/token/src/lib.rs
 use solana_sdk::pubkey::Pubkey;
 use async_trait::async_trait;
 use anyhow::Result;

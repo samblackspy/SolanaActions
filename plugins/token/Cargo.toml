@@ -1,6 +1,15 @@
 [package]
-name = "token"
+name = "solana-actions-token"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
+# These are the dependencies needed ONLY for the library code (src/lib.rs)
 [dependencies]
+solana-sdk = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+
+# These dependencies are ONLY for compiling tests (the `tests` directory)
+[dev-dependencies]
+solana_actions_core = { path = "../../solana_actions_core" }
+tokio = { workspace = true } # We also need tokio for our async tests
