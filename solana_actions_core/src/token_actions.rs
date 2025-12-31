@@ -552,6 +552,454 @@ impl Action for RequestFundsAction {
 }
 
 // =============================================================================
+// FETCH_PRICE Action - Get token price from Jupiter
+// =============================================================================
+
+#[derive(Debug)]
+pub struct FetchPriceAction {
+    meta: ActionMetadata,
+}
+
+impl FetchPriceAction {
+    pub fn new() -> Self {
+        let input_schema = json!({
+            "type": "object",
+            "properties": {
+                "tokenAddress": {
+                    "type": "string",
+                    "description": "The mint address of the token to fetch the price for",
+                }
+            },
+            "required": ["tokenAddress"],
+            "additionalProperties": false,
+        });
+
+        let examples = vec![ActionExample {
+            input: json!({
+                "tokenAddress": "So11111111111111111111111111111111111111112",
+            }),
+            output: json!({
+                "status": "success",
+                "price": "23.45",
+                "message": "Current price: $23.45 USDC",
+            }),
+            explanation: "Get the current price of SOL token in USDC".to_string(),
+        }];
+
+        let meta = ActionMetadata {
+            name: "FETCH_PRICE".to_string(),
+            similes: vec![
+                "get token price".to_string(),
+                "check price".to_string(),
+                "token value".to_string(),
+                "price check".to_string(),
+                "get price in usd".to_string(),
+            ],
+            description: "Fetch the current price of a Solana token in USDC using Jupiter API".to_string(),
+            examples,
+            input_schema,
+        };
+
+        Self { meta }
+    }
+}
+
+#[async_trait]
+impl Action for FetchPriceAction {
+    fn metadata(&self) -> &ActionMetadata {
+        &self.meta
+    }
+
+    async fn call(&self, _agent: &Agent, input: Value) -> Result<Value> {
+        #[derive(Deserialize)]
+        struct Input {
+            tokenAddress: String,
+        }
+
+        let parsed: Input = serde_json::from_value(input)?;
+
+        let url = format!(
+            "https://api.jup.ag/price/v2?ids={}",
+            parsed.tokenAddress
+        );
+
+        let client = reqwest::Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            return Ok(json!({
+                "status": "error",
+                "message": format!("Failed to fetch price: {}", response.status()),
+            }));
+        }
+
+        let data: Value = response.json().await?;
+        let price = data["data"][&parsed.tokenAddress]["price"]
+            .as_str()
+            .or_else(|| data["data"][&parsed.tokenAddress]["price"].as_f64().map(|_| ""))
+            .unwrap_or("");
+
+        let price_str = if price.is_empty() {
+            data["data"][&parsed.tokenAddress]["price"]
+                .as_f64()
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "N/A".to_string())
+        } else {
+            price.to_string()
+        };
+
+        if price_str == "N/A" {
+            return Ok(json!({
+                "status": "error",
+                "message": "Price data not available for the given token",
+            }));
+        }
+
+        Ok(json!({
+            "status": "success",
+            "price": price_str,
+            "message": format!("Current price: ${} USDC", price_str),
+        }))
+    }
+}
+
+// =============================================================================
+// TRADE Action - Swap tokens via Jupiter
+// =============================================================================
+
+#[derive(Debug)]
+pub struct TradeAction {
+    meta: ActionMetadata,
+}
+
+impl TradeAction {
+    pub fn new() -> Self {
+        let input_schema = json!({
+            "type": "object",
+            "properties": {
+                "outputMint": {
+                    "type": "string",
+                    "description": "Target token mint address to swap to",
+                },
+                "inputAmount": {
+                    "type": "number",
+                    "description": "Amount to swap (in token units, not lamports)",
+                },
+                "inputMint": {
+                    "type": "string",
+                    "description": "Source token mint address (defaults to SOL if omitted)",
+                },
+                "slippageBps": {
+                    "type": "integer",
+                    "description": "Slippage tolerance in basis points (e.g., 100 = 1%)",
+                },
+            },
+            "required": ["outputMint", "inputAmount"],
+            "additionalProperties": false,
+        });
+
+        let examples = vec![
+            ActionExample {
+                input: json!({
+                    "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                    "inputAmount": 1,
+                }),
+                output: json!({
+                    "status": "success",
+                    "message": "Trade executed successfully",
+                    "transaction": "5UfgJ5vV...",
+                }),
+                explanation: "Swap 1 SOL for USDC".to_string(),
+            },
+        ];
+
+        let meta = ActionMetadata {
+            name: "TRADE".to_string(),
+            similes: vec![
+                "swap tokens".to_string(),
+                "exchange tokens".to_string(),
+                "trade tokens".to_string(),
+                "convert tokens".to_string(),
+                "swap sol".to_string(),
+            ],
+            description: "Swap tokens using Jupiter Exchange. Defaults to SOL as input if inputMint is not specified.".to_string(),
+            examples,
+            input_schema,
+        };
+
+        Self { meta }
+    }
+}
+
+#[async_trait]
+impl Action for TradeAction {
+    fn metadata(&self) -> &ActionMetadata {
+        &self.meta
+    }
+
+    async fn call(&self, agent: &Agent, input: Value) -> Result<Value> {
+        use solana_sdk::transaction::VersionedTransaction;
+
+        #[derive(Deserialize)]
+        struct Input {
+            outputMint: String,
+            inputAmount: f64,
+            inputMint: Option<String>,
+            slippageBps: Option<u32>,
+        }
+
+        let parsed: Input = serde_json::from_value(input)?;
+
+        let input_mint = parsed
+            .inputMint
+            .clone()
+            .unwrap_or_else(|| "So11111111111111111111111111111111111111112".to_string());
+
+        let decimals = if input_mint == "So11111111111111111111111111111111111111112" {
+            9
+        } else {
+            6
+        };
+
+        let scaled_amount = (parsed.inputAmount * 10f64.powi(decimals)) as u64;
+
+        let quote_url = format!(
+            "https://quote-api.jup.ag/v6/quote?inputMint={}&outputMint={}&amount={}&dynamicSlippage=true",
+            input_mint, parsed.outputMint, scaled_amount
+        );
+
+        let client = reqwest::Client::new();
+        let quote_response: Value = client.get(&quote_url).send().await?.json().await?;
+
+        let swap_request = json!({
+            "quoteResponse": quote_response,
+            "userPublicKey": agent.wallet.pubkey().to_string(),
+            "wrapAndUnwrapSol": true,
+            "dynamicComputeUnitLimit": true,
+            "dynamicSlippage": true,
+        });
+
+        let swap_response: Value = client
+            .post("https://quote-api.jup.ag/v6/swap")
+            .header("Content-Type", "application/json")
+            .json(&swap_request)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        let swap_tx_b64 = swap_response["swapTransaction"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("No swapTransaction in response"))?;
+
+        let tx_bytes = base64_decode(swap_tx_b64)?;
+        let mut transaction: VersionedTransaction = bincode::deserialize(&tx_bytes)?;
+
+        let latest_blockhash = agent.client.get_latest_blockhash()?;
+        transaction.message.set_recent_blockhash(latest_blockhash);
+
+        let signed_tx = agent.wallet.sign_transaction(transaction).await?;
+        let signature = agent.client.send_and_confirm_transaction(&signed_tx)?;
+
+        Ok(json!({
+            "status": "success",
+            "message": "Trade executed successfully",
+            "transaction": signature.to_string(),
+        }))
+    }
+}
+
+fn base64_decode(input: &str) -> Result<Vec<u8>> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    Ok(STANDARD.decode(input)?)
+}
+
+// =============================================================================
+// GET_JUPITER_TOKEN_LIST Action
+// =============================================================================
+
+#[derive(Debug)]
+pub struct GetJupiterTokenListAction {
+    meta: ActionMetadata,
+}
+
+impl GetJupiterTokenListAction {
+    pub fn new() -> Self {
+        let input_schema = json!({
+            "type": "object",
+            "properties": {
+                "tags": {
+                    "type": "string",
+                    "description": "Filter by tags (e.g. 'verified', 'strict')",
+                }
+            },
+            "additionalProperties": false,
+        });
+
+        let examples = vec![ActionExample {
+            input: json!({"tags": "strict"}),
+            output: json!({
+                "status": "success",
+                "tokens": [],
+            }),
+            explanation: "Get strict token list from Jupiter".to_string(),
+        }];
+
+        let meta = ActionMetadata {
+            name: "GET_JUPITER_TOKEN_LIST".to_string(),
+            similes: vec![
+                "jupiter tokens".to_string(),
+                "token list".to_string(),
+                "all tokens".to_string(),
+            ],
+            description: "Get the full token list from Jupiter with optional tag filtering".to_string(),
+            examples,
+            input_schema,
+        };
+
+        Self { meta }
+    }
+}
+
+#[async_trait]
+impl Action for GetJupiterTokenListAction {
+    fn metadata(&self) -> &ActionMetadata {
+        &self.meta
+    }
+
+    async fn call(&self, _agent: &Agent, input: Value) -> Result<Value> {
+        #[derive(Deserialize)]
+        struct Input {
+            tags: Option<String>,
+        }
+
+        let parsed: Input = serde_json::from_value(input)?;
+
+        let url = match parsed.tags.as_deref() {
+            Some("strict") => "https://token.jup.ag/strict",
+            _ => "https://token.jup.ag/all",
+        };
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get(url)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Ok(json!({
+                "status": "error",
+                "message": format!("Jupiter API error: {}", response.status()),
+            }));
+        }
+
+        let data: Value = response.json().await?;
+
+        Ok(json!({
+            "status": "success",
+            "tokens": data,
+        }))
+    }
+}
+
+// =============================================================================
+// SEARCH_JUPITER_TOKENS Action
+// =============================================================================
+
+#[derive(Debug)]
+pub struct SearchJupiterTokensAction {
+    meta: ActionMetadata,
+}
+
+impl SearchJupiterTokensAction {
+    pub fn new() -> Self {
+        let input_schema = json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query (symbol, name, or address)",
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": false,
+        });
+
+        let examples = vec![ActionExample {
+            input: json!({"query": "BONK"}),
+            output: json!({
+                "status": "success",
+                "tokens": [],
+                "count": 0,
+            }),
+            explanation: "Search for BONK token".to_string(),
+        }];
+
+        let meta = ActionMetadata {
+            name: "SEARCH_JUPITER_TOKENS".to_string(),
+            similes: vec![
+                "find token".to_string(),
+                "search token".to_string(),
+                "lookup token".to_string(),
+            ],
+            description: "Search Jupiter token list by symbol, name, or address".to_string(),
+            examples,
+            input_schema,
+        };
+
+        Self { meta }
+    }
+}
+
+#[async_trait]
+impl Action for SearchJupiterTokensAction {
+    fn metadata(&self) -> &ActionMetadata {
+        &self.meta
+    }
+
+    async fn call(&self, _agent: &Agent, input: Value) -> Result<Value> {
+        #[derive(Deserialize)]
+        struct Input {
+            query: String,
+        }
+
+        let parsed: Input = serde_json::from_value(input)?;
+        let query_lower = parsed.query.to_lowercase();
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get("https://token.jup.ag/all")
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Ok(json!({
+                "status": "error",
+                "message": format!("Jupiter API error: {}", response.status()),
+            }));
+        }
+
+        let tokens: Vec<Value> = response.json().await?;
+
+        let matching: Vec<&Value> = tokens.iter().filter(|t| {
+            let symbol = t.get("symbol").and_then(|s| s.as_str()).unwrap_or("").to_lowercase();
+            let name = t.get("name").and_then(|s| s.as_str()).unwrap_or("").to_lowercase();
+            let address = t.get("address").and_then(|s| s.as_str()).unwrap_or("");
+            
+            symbol.contains(&query_lower) || name.contains(&query_lower) || address == parsed.query
+        }).take(20).collect();
+
+        Ok(json!({
+            "status": "success",
+            "tokens": matching,
+            "count": matching.len(),
+        }))
+    }
+}
+
+// =============================================================================
 // Register token actions
 // =============================================================================
 
@@ -562,4 +1010,8 @@ pub fn register_token_actions(registry: &mut ActionRegistry) {
     registry.register(WalletAddressAction::new());
     registry.register(GetTpsAction::new());
     registry.register(RequestFundsAction::new());
+    registry.register(FetchPriceAction::new());
+    registry.register(TradeAction::new());
+    registry.register(GetJupiterTokenListAction::new());
+    registry.register(SearchJupiterTokensAction::new());
 }
