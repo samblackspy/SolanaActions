@@ -8,6 +8,10 @@ edition = "2021"
 solana-sdk = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
+dotenv = "0.15.0"
+spl-associated-token-account = { workspace = true }
+spl-token = { workspace = true }
+solana-program = { workspace = true }
 
 # These dependencies are ONLY for compiling tests (the `tests` directory)
 [dev-dependencies]

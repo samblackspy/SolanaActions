@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-/// a trait for signing Solana transactions.
+/// A trait for signing Solana transactions.
 #[async_trait]
 pub trait Wallet: Send + Sync + Debug {
     fn pubkey(&self) -> Pubkey;

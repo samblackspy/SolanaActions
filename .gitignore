@@ -1,2 +1,4 @@
 /target
-plugins/token/tests/
+/plugins/token/tests/
+/plugins/token/target
+.env

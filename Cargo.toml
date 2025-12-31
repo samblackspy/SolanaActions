@@ -17,6 +17,7 @@ solana-client = "1.18.1"
 solana-program = "1.18.1"
 spl-token = { version = "4.0.0", features = ["no-entrypoint"] }
 spl-associated-token-account = { version = "2.3.0", features = ["no-entrypoint"] }
+mpl-token-metadata = "4.1.2"
 
 # Async & Utilities
 tokio = { version = "1.29.1", features = ["full"] }

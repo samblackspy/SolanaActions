@@ -1197,6 +1197,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotenv"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
+
+[[package]]
 name = "eager"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2283,6 +2289,19 @@ dependencies = [
 [[package]]
 name = "misc"
 version = "0.1.0"
+
+[[package]]
+name = "mpl-token-metadata"
+version = "4.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "caf0f61b553e424a6234af1268456972ee66c2222e1da89079242251fa7479e5"
+dependencies = [
+ "borsh 0.10.4",
+ "num-derive 0.3.3",
+ "num-traits",
+ "solana-program",
+ "thiserror",
+]
 
 [[package]]
 name = "native-tls"
@@ -3562,8 +3581,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "dotenv",
+ "solana-program",
  "solana-sdk",
  "solana_actions_core",
+ "spl-associated-token-account",
+ "spl-token",
  "tokio",
 ]
 
@@ -4261,8 +4284,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.21.7",
  "bigdecimal",
+ "bincode",
  "bs58 0.5.1",
+ "mpl-token-metadata",
  "reqwest 0.12.4",
  "serde",
  "serde_json",
@@ -4274,6 +4300,7 @@ dependencies = [
  "spl-token",
  "tokio",
  "url",
+ "urlencoding",
 ]
 
 [[package]]
@@ -5035,6 +5062,12 @@ dependencies = [
  "percent-encoding",
  "serde",
 ]
+
+[[package]]
+name = "urlencoding"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "utf-8"
