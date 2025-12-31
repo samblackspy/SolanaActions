@@ -1000,6 +1000,352 @@ impl Action for SearchJupiterTokensAction {
 }
 
 // =============================================================================
+// RUGCHECK Action
+// =============================================================================
+
+#[derive(Debug)]
+pub struct RugcheckAction {
+    meta: ActionMetadata,
+}
+
+impl RugcheckAction {
+    pub fn new() -> Self {
+        let input_schema = json!({
+            "type": "object",
+            "properties": {
+                "mint": {
+                    "type": "string",
+                    "description": "The token mint address to check",
+                }
+            },
+            "required": ["mint"],
+            "additionalProperties": false,
+        });
+
+        let examples = vec![ActionExample {
+            input: json!({
+                "mint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+            }),
+            output: json!({
+                "status": "success",
+                "response": {},
+            }),
+            explanation: "Check whether JUP is a rugpull".to_string(),
+        }];
+
+        let meta = ActionMetadata {
+            name: "RUGCHECK".to_string(),
+            similes: vec![
+                "check rug pull".to_string(),
+                "rug pull check".to_string(),
+                "rug pull detector".to_string(),
+                "token safety".to_string(),
+            ],
+            description: "Check if a token is a rug pull using rugcheck.xyz API".to_string(),
+            examples,
+            input_schema,
+        };
+
+        Self { meta }
+    }
+}
+
+#[async_trait]
+impl Action for RugcheckAction {
+    fn metadata(&self) -> &ActionMetadata {
+        &self.meta
+    }
+
+    async fn call(&self, _agent: &Agent, input: Value) -> Result<Value> {
+        #[derive(Deserialize)]
+        struct Input {
+            mint: String,
+        }
+
+        let parsed: Input = serde_json::from_value(input)?;
+
+        let url = format!(
+            "https://api.rugcheck.xyz/v1/tokens/{}/report/summary",
+            parsed.mint
+        );
+
+        let client = reqwest::Client::new();
+        let response = client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            return Ok(json!({
+                "status": "error",
+                "message": format!("Failed to fetch rugcheck report: {}", response.status()),
+            }));
+        }
+
+        let report: Value = response.json().await?;
+
+        Ok(json!({
+            "status": "success",
+            "response": report,
+        }))
+    }
+}
+
+// =============================================================================
+// PYTH_FETCH_PRICE Action
+// =============================================================================
+
+#[derive(Debug)]
+pub struct PythFetchPriceAction {
+    meta: ActionMetadata,
+}
+
+impl PythFetchPriceAction {
+    pub fn new() -> Self {
+        let input_schema = json!({
+            "type": "object",
+            "properties": {
+                "tokenSymbol": {
+                    "type": "string",
+                    "description": "The token symbol to fetch price for (e.g., SOL, BTC, ETH)",
+                }
+            },
+            "required": ["tokenSymbol"],
+            "additionalProperties": false,
+        });
+
+        let examples = vec![ActionExample {
+            input: json!({ "tokenSymbol": "SOL" }),
+            output: json!({
+                "status": "success",
+                "price": "150.25",
+                "message": "Current price: $150.25",
+            }),
+            explanation: "Get the current SOL/USD price from Pyth oracle".to_string(),
+        }];
+
+        let meta = ActionMetadata {
+            name: "PYTH_FETCH_PRICE".to_string(),
+            similes: vec![
+                "get pyth price".to_string(),
+                "pyth oracle price".to_string(),
+                "oracle price".to_string(),
+            ],
+            description: "Fetch the current price from Pyth oracle price feed".to_string(),
+            examples,
+            input_schema,
+        };
+
+        Self { meta }
+    }
+}
+
+#[async_trait]
+impl Action for PythFetchPriceAction {
+    fn metadata(&self) -> &ActionMetadata {
+        &self.meta
+    }
+
+    async fn call(&self, _agent: &Agent, input: Value) -> Result<Value> {
+        #[derive(Deserialize)]
+        struct Input {
+            tokenSymbol: String,
+        }
+
+        let parsed: Input = serde_json::from_value(input)?;
+        let hermes_url = "https://hermes.pyth.network";
+
+        let feed_url = format!(
+            "{}/v2/price_feeds?query={}&asset_type=crypto",
+            hermes_url, parsed.tokenSymbol
+        );
+
+        let client = reqwest::Client::new();
+        let feed_response = client.get(&feed_url).send().await?;
+        let feeds: Value = feed_response.json().await?;
+
+        let feed_array = feeds.as_array().ok_or_else(|| anyhow::anyhow!("Invalid response"))?;
+        if feed_array.is_empty() {
+            return Ok(json!({
+                "status": "error",
+                "message": format!("No price feed found for {}", parsed.tokenSymbol),
+            }));
+        }
+
+        let feed_id = feed_array
+            .iter()
+            .find(|f| {
+                f["attributes"]["base"]
+                    .as_str()
+                    .map(|b| b.to_lowercase() == parsed.tokenSymbol.to_lowercase())
+                    .unwrap_or(false)
+            })
+            .or_else(|| feed_array.first())
+            .and_then(|f| f["id"].as_str())
+            .ok_or_else(|| anyhow::anyhow!("No feed ID found"))?;
+
+        let price_url = format!(
+            "{}/v2/updates/price/latest?ids[]={}",
+            hermes_url, feed_id
+        );
+
+        let price_response = client.get(&price_url).send().await?;
+        let price_data: Value = price_response.json().await?;
+
+        let parsed_data = price_data["parsed"]
+            .as_array()
+            .and_then(|a| a.first())
+            .ok_or_else(|| anyhow::anyhow!("No price data"))?;
+
+        let price = parsed_data["price"]["price"]
+            .as_str()
+            .or_else(|| parsed_data["price"]["price"].as_i64().map(|_| ""))
+            .unwrap_or("0");
+        let expo = parsed_data["price"]["expo"].as_i64().unwrap_or(0);
+
+        let price_num: f64 = price.parse().unwrap_or(0.0);
+        let actual_price = price_num * 10f64.powi(expo as i32);
+        let formatted_price = format!("{:.2}", actual_price);
+
+        Ok(json!({
+            "status": "success",
+            "price": formatted_price,
+            "message": format!("Current price: ${}", formatted_price),
+        }))
+    }
+}
+
+// =============================================================================
+// CREATE_LIMIT_ORDER Action
+// =============================================================================
+
+#[derive(Debug)]
+pub struct CreateLimitOrderAction {
+    meta: ActionMetadata,
+}
+
+impl CreateLimitOrderAction {
+    pub fn new() -> Self {
+        let input_schema = json!({
+            "type": "object",
+            "properties": {
+                "inputMint": {
+                    "type": "string",
+                    "description": "Input token mint address",
+                },
+                "outputMint": {
+                    "type": "string",
+                    "description": "Output token mint address",
+                },
+                "inAmount": {
+                    "type": "string",
+                    "description": "Input amount in base units",
+                },
+                "outAmount": {
+                    "type": "string",
+                    "description": "Expected output amount in base units",
+                }
+            },
+            "required": ["inputMint", "outputMint", "inAmount", "outAmount"],
+            "additionalProperties": false,
+        });
+
+        let examples = vec![ActionExample {
+            input: json!({
+                "inputMint": "So11111111111111111111111111111111111111112",
+                "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                "inAmount": "1000000000",
+                "outAmount": "150000000",
+            }),
+            output: json!({
+                "status": "success",
+                "signature": "5K3N9...3J4",
+            }),
+            explanation: "Create a limit order to sell 1 SOL for 150 USDC".to_string(),
+        }];
+
+        let meta = ActionMetadata {
+            name: "CREATE_LIMIT_ORDER".to_string(),
+            similes: vec![
+                "place limit order".to_string(),
+                "submit limit order".to_string(),
+                "jupiter limit order".to_string(),
+            ],
+            description: "Create a limit order on Jupiter Exchange".to_string(),
+            examples,
+            input_schema,
+        };
+
+        Self { meta }
+    }
+}
+
+#[async_trait]
+impl Action for CreateLimitOrderAction {
+    fn metadata(&self) -> &ActionMetadata {
+        &self.meta
+    }
+
+    async fn call(&self, agent: &Agent, input: Value) -> Result<Value> {
+        use solana_sdk::transaction::VersionedTransaction;
+
+        #[derive(Deserialize)]
+        struct Input {
+            inputMint: String,
+            outputMint: String,
+            inAmount: String,
+            outAmount: String,
+        }
+
+        let parsed: Input = serde_json::from_value(input)?;
+
+        let url = "https://api.jup.ag/limit/v2/createOrder";
+
+        let order_params = json!({
+            "maker": agent.wallet.pubkey().to_string(),
+            "payer": agent.wallet.pubkey().to_string(),
+            "inputMint": parsed.inputMint,
+            "outputMint": parsed.outputMint,
+            "params": {
+                "makingAmount": parsed.inAmount,
+                "takingAmount": parsed.outAmount,
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(url)
+            .header("Content-Type", "application/json")
+            .json(&order_params)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Ok(json!({
+                "status": "error",
+                "message": format!("Jupiter API error: {}", response.status()),
+            }));
+        }
+
+        let data: Value = response.json().await?;
+        let tx_b64 = data["tx"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("No transaction in response"))?;
+
+        let tx_bytes = base64_decode(tx_b64)?;
+        let mut transaction: VersionedTransaction = bincode::deserialize(&tx_bytes)?;
+
+        let latest_blockhash = agent.client.get_latest_blockhash()?;
+        transaction.message.set_recent_blockhash(latest_blockhash);
+
+        let signed_tx = agent.wallet.sign_transaction(transaction).await?;
+        let signature = agent.client.send_and_confirm_transaction(&signed_tx)?;
+
+        Ok(json!({
+            "status": "success",
+            "signature": signature.to_string(),
+        }))
+    }
+}
+
+// =============================================================================
 // Register token actions
 // =============================================================================
 
@@ -1014,4 +1360,7 @@ pub fn register_token_actions(registry: &mut ActionRegistry) {
     registry.register(TradeAction::new());
     registry.register(GetJupiterTokenListAction::new());
     registry.register(SearchJupiterTokensAction::new());
+    registry.register(RugcheckAction::new());
+    registry.register(PythFetchPriceAction::new());
+    registry.register(CreateLimitOrderAction::new());
 }
